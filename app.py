@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from repo import register,login
+import service
 
 
 
@@ -26,9 +27,8 @@ def register_user(request: AuthRequestDTO):
 
 @app.post("/login")
 def login_user(request: AuthRequestDTO):
-    success = login(request.email,request.password)
-    print(success)
-    if success!= None: 
-        return {"is_success": True}
+    jwt = service.login(request.email,request.password)
+    if jwt!= None: 
+        return {"is_success": True, "token": jwt}
     return {"is_success": False}
 

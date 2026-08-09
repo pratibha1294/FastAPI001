@@ -9,7 +9,7 @@ def register(email, password):
 def login(email,password):
 
     cursor = connection.cursor()
-    cursor.execute("SELECT email, password FROM users where email= %s and password=%s", (email,password))
+    cursor.execute("SELECT id, email, password FROM users where email= %s and password=%s", (email,password))
 
     user = cursor.fetchone()
     return user
