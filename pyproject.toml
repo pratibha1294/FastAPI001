@@ -1,0 +1,19 @@
+[project]
+name = "fastapi001"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Pratibha", email = "50351997+pratibha1294@users.noreply.github.com" }
+]
+requires-python = ">=3.9"
+dependencies = [
+    "alembic>=1.16.5",
+    "fastapi>=0.128.8",
+    "pymysql>=1.2.0",
+    "python-dotenv>=1.2.1",
+    "sqlalchemy>=2.0.51",
+    "uvicorn>=0.39.0",
+]
+
+[tool.uv]
+package = false
