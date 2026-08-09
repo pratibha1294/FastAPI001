@@ -1,4 +1,6 @@
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from repo import register,login
 import service
@@ -7,9 +9,11 @@ import service
 
 app = FastAPI()
 
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 @app.get("/")
 def root():
-    return {"message": "Hello, FastAPI!"}
+    return FileResponse("static/index.html")
 
 @app.get("/health")
 def health():
