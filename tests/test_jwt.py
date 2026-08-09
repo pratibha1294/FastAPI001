@@ -7,20 +7,20 @@ from jwt import (
     TokenData,
     TokenIsExpiredError,
     TokenIsInvalidError,
-    decrypt,
-    encrypt,
+    validate,
+    create,
 )
 
 
 def test_encrypt_returns_a_string():
-    token = encrypt(sub="user-1")
+    token = create(sub="user-1")
     assert isinstance(token, str)
     assert token.count(".") == 2
 
 
 def test_decrypt_returns_token_data_with_defaults():
-    token = encrypt(sub="user-1")
-    data = decrypt(token)
+    token = create(sub="user-1")
+    data = validate(token)
 
     assert isinstance(data, TokenData)
     assert data.sub == "user-1"
@@ -32,8 +32,8 @@ def test_decrypt_returns_token_data_with_defaults():
 
 def test_encrypt_with_custom_claims_and_exp():
     exp = datetime.now(timezone.utc) + timedelta(hours=2)
-    token = encrypt(sub="user-2", claims={"role": "admin"}, exp=exp)
-    data = decrypt(token)
+    token = create(sub="user-2", claims={"role": "admin"}, exp=exp)
+    data = validate(token)
 
     assert data.sub == "user-2"
     assert data.claims == {"role": "admin"}
@@ -42,19 +42,19 @@ def test_encrypt_with_custom_claims_and_exp():
 
 def test_decrypt_expired_token_raises_token_is_expired_error():
     exp = datetime.now(timezone.utc) - timedelta(seconds=1)
-    token = encrypt(sub="user-3", exp=exp)
+    token = create(sub="user-3", exp=exp)
 
     with pytest.raises(TokenIsExpiredError):
-        decrypt(token)
+        validate(token)
 
 
 def test_decrypt_malformed_token_raises_token_is_invalid_error():
     with pytest.raises(TokenIsInvalidError):
-        decrypt("not-a-valid-jwt")
+        validate("not-a-valid-jwt")
 
 
 def test_decrypt_tampered_signature_raises_token_is_invalid_error():
-    token = encrypt(sub="user-4", secret="secret-a")
+    token = create(sub="user-4", secret="secret-a")
 
     with pytest.raises(TokenIsInvalidError):
-        decrypt(token, secret="secret-b")
+        validate(token, secret="secret-b")

@@ -63,7 +63,7 @@ class TokenData:
     claims: dict[str, Any] = field(default_factory=dict)
 
 
-def encrypt(
+def create(
     sub: str,
     claims: Optional[dict[str, Any]] = None,
     exp: Optional[datetime] = None,
@@ -81,7 +81,7 @@ def encrypt(
     return _pyjwt.encode(payload, secret, algorithm=algorithm)
 
 
-def decrypt(
+def validate(
     token: str,
     secret: str = DEFAULT_SECRET,
     algorithms: tuple[str, ...] = (DEFAULT_ALGORITHM,),
