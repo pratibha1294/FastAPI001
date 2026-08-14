@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -22,6 +22,7 @@ def health():
 class AuthRequestDTO(BaseModel):
     email: str
     password: str
+    
 
 @app.post("/register")
 def register_user(request: AuthRequestDTO):
@@ -35,4 +36,18 @@ def login_user(request: AuthRequestDTO):
     if jwt!= None: 
         return {"is_success": True, "token": jwt}
     return {"is_success": False}
+
+class UpdatePasswordReqDTO(BaseModel):
+    userId: int
+    old_password: str
+    new_password: str
+
+@app.patch("/profile/update-password")
+def update_user_assword(request: UpdatePasswordReqDTO):
+    try:
+        service.update_password(request.userId, request.old_password, request.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"message": "Password updated successfully"}
+
 

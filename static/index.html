@@ -79,6 +79,26 @@
   }
   .field input:focus { border-color: var(--primary); }
 
+  .password-wrap { position: relative; }
+  .password-wrap input { padding-right: 40px; }
+  .password-toggle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--muted);
+    padding: 0;
+  }
+  .password-toggle:hover { color: var(--primary); }
+  .password-toggle svg { width: 18px; height: 18px; }
+
   button.primary {
     width: 100%;
     padding: 11px;
@@ -122,14 +142,24 @@
 <div id="app"></div>
 
 <script>
-const { createApp, reactive, computed, onMounted } = Vue;
+const { createApp, reactive, computed, onMounted, ref } = Vue;
 
 const API_BASE = "";
+
+function decodeJwtPayload(token) {
+  try {
+    const base64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(atob(base64));
+  } catch (e) {
+    return null;
+  }
+}
 
 const state = reactive({
   route: location.hash.replace("#", "") || "/login",
   token: localStorage.getItem("token") || null,
   email: localStorage.getItem("email") || null,
+  userId: localStorage.getItem("userId") || null,
 });
 
 window.addEventListener("hashchange", () => {
@@ -141,18 +171,57 @@ function navigate(path) {
 }
 
 function setSession(email, token) {
+  const payload = decodeJwtPayload(token);
+  const userId = payload ? payload.sub : null;
   state.token = token;
   state.email = email;
+  state.userId = userId;
   localStorage.setItem("token", token);
   localStorage.setItem("email", email);
+  if (userId != null) localStorage.setItem("userId", userId);
 }
 
 function clearSession() {
   state.token = null;
   state.email = null;
+  state.userId = null;
   localStorage.removeItem("token");
   localStorage.removeItem("email");
+  localStorage.removeItem("userId");
 }
+
+const PasswordField = {
+  props: {
+    modelValue: { type: String, default: "" },
+    autocomplete: { type: String, default: "current-password" },
+  },
+  emits: ["update:modelValue"],
+  setup(props, { emit }) {
+    const visible = ref(false);
+    return { visible, emit };
+  },
+  template: `
+    <div class="password-wrap">
+      <input
+        :type="visible ? 'text' : 'password'"
+        :value="modelValue"
+        @input="emit('update:modelValue', $event.target.value)"
+        :autocomplete="autocomplete"
+        required
+      />
+      <button type="button" class="password-toggle" @click="visible = !visible" :aria-label="visible ? 'Hide password' : 'Show password'">
+        <svg v-if="!visible" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"></path>
+          <circle cx="12" cy="12" r="3"></circle>
+        </svg>
+        <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.6 18.6 0 0 1 5.06-5.94M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a18.6 18.6 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+          <line x1="1" y1="1" x2="23" y2="23"></line>
+        </svg>
+      </button>
+    </div>
+  `,
+};
 
 const NavBar = {
   setup() {
@@ -168,6 +237,7 @@ const NavBar = {
         </template>
         <template v-else>
           <a :class="{active: state.route === '/dashboard'}" @click="navigate('/dashboard')">Dashboard</a>
+          <a :class="{active: state.route === '/update-password'}" @click="navigate('/update-password')">Update Password</a>
           <button class="link" @click="clearSession(); navigate('/login')">Logout</button>
         </template>
       </div>
@@ -176,6 +246,7 @@ const NavBar = {
 };
 
 const LoginPage = {
+  components: { PasswordField },
   setup() {
     const form = reactive({ email: "", password: "" });
     const status = reactive({ loading: false, error: "", success: "" });
@@ -221,7 +292,7 @@ const LoginPage = {
         </div>
         <div class="field">
           <label>Password</label>
-          <input type="password" v-model="form.password" required autocomplete="current-password" />
+          <PasswordField v-model="form.password" autocomplete="current-password" />
         </div>
         <button class="primary" type="submit" :disabled="status.loading">
           {{ status.loading ? "Logging in..." : "Log in" }}
@@ -235,6 +306,7 @@ const LoginPage = {
 };
 
 const RegisterPage = {
+  components: { PasswordField },
   setup() {
     const form = reactive({ email: "", password: "" });
     const status = reactive({ loading: false, error: "", success: "" });
@@ -274,7 +346,7 @@ const RegisterPage = {
         </div>
         <div class="field">
           <label>Password</label>
-          <input type="password" v-model="form.password" required autocomplete="new-password" />
+          <PasswordField v-model="form.password" autocomplete="new-password" />
         </div>
         <button class="primary" type="submit" :disabled="status.loading">
           {{ status.loading ? "Registering..." : "Register" }}
@@ -289,7 +361,7 @@ const RegisterPage = {
 
 const DashboardPage = {
   setup() {
-    return { state };
+    return { state, navigate };
   },
   template: `
     <div class="card dashboard">
@@ -297,12 +369,84 @@ const DashboardPage = {
       <p class="subtitle">You are logged in.</p>
       <label style="font-size:13px; font-weight:600;">JWT token</label>
       <div class="token-box">{{ state.token }}</div>
+      <button class="primary" style="margin-top:20px;" @click="navigate('/update-password')">Update Password</button>
+    </div>
+  `,
+};
+
+const UpdatePasswordPage = {
+  components: { PasswordField },
+  setup() {
+    const form = reactive({ old_password: "", new_password: "", confirm_password: "" });
+    const status = reactive({ loading: false, error: "", success: "" });
+
+    async function submit() {
+      status.error = "";
+      status.success = "";
+
+      if (form.new_password !== form.confirm_password) {
+        status.error = "New password and confirmation do not match";
+        return;
+      }
+
+      status.loading = true;
+      try {
+        const res = await fetch(`${API_BASE}/profile/update-password`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: Number(state.userId),
+            old_password: form.old_password,
+            new_password: form.new_password,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          status.error = data.detail || "Failed to update password";
+          return;
+        }
+        status.success = data.message || "Password updated successfully";
+        form.old_password = "";
+        form.new_password = "";
+        form.confirm_password = "";
+      } catch (e) {
+        status.error = "Something went wrong. Please try again.";
+      } finally {
+        status.loading = false;
+      }
+    }
+
+    return { form, status, submit };
+  },
+  template: `
+    <div class="card">
+      <h1>Update password</h1>
+      <p class="subtitle">Change your account password</p>
+      <div v-if="status.error" class="alert error">{{ status.error }}</div>
+      <div v-if="status.success" class="alert success">{{ status.success }}</div>
+      <form @submit.prevent="submit">
+        <div class="field">
+          <label>Current password</label>
+          <PasswordField v-model="form.old_password" autocomplete="current-password" />
+        </div>
+        <div class="field">
+          <label>New password</label>
+          <PasswordField v-model="form.new_password" autocomplete="new-password" />
+        </div>
+        <div class="field">
+          <label>Confirm new password</label>
+          <PasswordField v-model="form.confirm_password" autocomplete="new-password" />
+        </div>
+        <button class="primary" type="submit" :disabled="status.loading">
+          {{ status.loading ? "Updating..." : "Update password" }}
+        </button>
+      </form>
     </div>
   `,
 };
 
 const App = {
-  components: { NavBar, LoginPage, RegisterPage, DashboardPage },
+  components: { NavBar, LoginPage, RegisterPage, DashboardPage, UpdatePasswordPage },
   setup() {
     onMounted(() => {
       if (!location.hash) location.hash = state.token ? "/dashboard" : "/login";
@@ -310,6 +454,9 @@ const App = {
     const current = computed(() => {
       if (state.route === "/dashboard") {
         return state.token ? "DashboardPage" : "LoginPage";
+      }
+      if (state.route === "/update-password") {
+        return state.token ? "UpdatePasswordPage" : "LoginPage";
       }
       if (state.route === "/register") return "RegisterPage";
       return "LoginPage";
