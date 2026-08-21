@@ -17,7 +17,7 @@ Each cycle ends with something runnable and demoable. Don't start cycle N+1 unti
 | Module | File(s) | What it means here |
 |---|---|---|
 | **DB/Repo** | `repo.py`, `alembic/versions/` | Raw SQL, schema design, migrations |
-| **File Container** | new `storage.py` (or `filestore.py`) | Local filesystem today, structured to look like an S3 bucket API |
+| **File Container** | new `storage.py` (or `filestore.py`) | Real S3-compatible object storage via [Garage](https://garagehq.deuxfleurs.fr/), talked to with `boto3` |
 | **Service Layer** | `service.py` | Orchestration — calls repo + storage + ACL, no SQL of its own |
 | **ACL/Middleware** | new `acl.py`, FastAPI dependencies in `app.py` | Who can do what to which resource |
 
@@ -33,11 +33,16 @@ Each cycle ends with something runnable and demoable. Don't start cycle N+1 unti
 - `repo.py` additions: `create_file_record(owner_id, filename, storage_key, size, content_type)`, `get_file(file_id)`, `list_files_for_user(owner_id)`.
 
 ### File Container
-- Introduce `storage.py` with a small interface even though it's local disk for now:
-  - `save(key: str, content: bytes) -> None`
-  - `read(key: str) -> bytes`
-  - `delete(key: str) -> None`
-  - Files live under `./data/blobs/<uuid>` — the `storage_key` in the DB is the UUID, **never** the original filename (this is the first ACL lesson: never trust or expose filesystem paths directly).
+- Run [Garage](https://garagehq.deuxfleurs.fr/) locally (Docker is easiest for dev) as your object store — this is a real S3-compatible server, not a fake one, so everything you learn here (`boto3`, bucket/key model, presigned URLs in cycle 4) transfers directly to AWS S3 later.
+  - `docker run -d -p 3900:3900 -p 3901:3901 -p 3902:3902 -p 3903:3903 dxflrs/garage:v2.3.0 /garage server --single-node --default-bucket`
+  - One-time setup via the `garage` CLI: `garage bucket create dropbox-clone`, `garage key create app-key`, `garage bucket allow --read --write --owner dropbox-clone --key app-key`.
+- Introduce `storage.py` wrapping a `boto3` S3 client, with a small interface even though it's a single-node local Garage instance for now:
+  - `save(key: str, content: bytes) -> None` → `s3.put_object(Bucket=..., Key=key, Body=content)`
+  - `read(key: str) -> bytes` → `s3.get_object(...)["Body"].read()`
+  - `delete(key: str) -> None` → `s3.delete_object(...)`
+  - Client config: `endpoint_url` pointing at your Garage instance (e.g. `http://localhost:3900`), `region_name="garage"`, access/secret key from `garage key create`, path-style addressing.
+  - The `storage_key` in the DB is a UUID object key, **never** the original filename (this is the first ACL lesson: never trust or expose storage keys/paths directly — same reasoning applies whether the backing store is a filesystem or a bucket).
+  - Keep credentials and endpoint in env vars / settings, not hardcoded — this is also how you'd point the same code at real AWS S3 later with zero code changes, just config.
 
 ### Service Layer
 - `service.upload_file(user_id, filename, content)`: generates storage key, calls `storage.save`, calls `repo.create_file_record`. One function, three collaborators — your first taste of a "big service function."
@@ -54,7 +59,7 @@ Each cycle ends with something runnable and demoable. Don't start cycle N+1 unti
 
 ### Side effects you'll get
 - First real feel for "service function calling multiple repos/collaborators."
-- First deliberate filesystem design decision (opaque keys vs. real filenames).
+- First deliberate object-storage design decision (opaque keys vs. real filenames).
 
 ---
 
@@ -69,7 +74,7 @@ Each cycle ends with something runnable and demoable. Don't start cycle N+1 unti
 - Practice: composite `WHERE` with expiry check (`expires_at IS NULL OR expires_at > NOW()`).
 
 ### File Container
-- No new capability yet — but now two access *paths* exist (owner path, share-token path) hitting the same `storage.read`. Forces you to centralize the read behind one service function instead of duplicating disk access.
+- No new capability yet — but now two access *paths* exist (owner path, share-token path) hitting the same `storage.read`. Forces you to centralize the read behind one service function instead of duplicating storage-client access.
 
 ### Service Layer
 - `service.create_share_link(user_id, file_id, target_email=None, ttl_hours=None)`: verify caller owns the file, generate a signed/random token, write share row, return shareable URL.
@@ -106,10 +111,10 @@ Each cycle ends with something runnable and demoable. Don't start cycle N+1 unti
   - `sum_storage_used(user_id)` — `SUM(size_bytes)` aggregate query for quota checks.
 
 ### File Container
-- `storage.py` gets a `usage_for_prefix` or you track size purely via DB sum (recommended — keeps filesystem dumb, matches how S3-backed systems actually work: the bucket doesn't know your quotas, your app does).
+- Track size purely via DB sum, not via bucket listing (recommended — keeps the bucket dumb, matches how S3-backed systems actually work: the bucket doesn't know your quotas, your app does).
 
 ### Service Layer
-- `service.upload_file` (revisited) now: resolves target folder, checks quota via `repo.sum_storage_used` **before** writing to disk (order matters — never write the blob before you know it's allowed), then proceeds as cycle 1.
+- `service.upload_file` (revisited) now: resolves target folder, checks quota via `repo.sum_storage_used` **before** writing to Garage (order matters — never write the object before you know it's allowed), then proceeds as cycle 1.
 - `service.move_file(user_id, file_id, new_folder_id)`, `service.create_folder(user_id, name, parent_id)`.
 - `service.search(user_id, query)`: search own filenames + shared-with-me filenames — another UNION-based query, service just orchestrates.
 
@@ -138,11 +143,12 @@ Each cycle ends with something runnable and demoable. Don't start cycle N+1 unti
 - `revoke_shares_for_file(file_id)` used on file delete.
 
 ### File Container
-- Add `storage.generate_signed_url(key, ttl_seconds)` and `storage.verify_signed_url(url_or_token)`. Since there's no real S3, implement this yourself: HMAC the `key + expiry` with a server secret, expose it as a query param, verify signature + expiry on a dedicated route. This is the exact mechanism S3/GCS signed URLs use — you're building the real thing at small scale.
-- Download endpoint changes: instead of streaming the file through your API on every request, `GET /files/{id}/download` now returns a signed URL, and a separate lightweight route serves bytes given a valid signature — this is the "give me a link, not a session" pattern real file services use.
+- Add `storage.generate_signed_url(key, ttl_seconds)` — because Garage is real S3-compatible storage, this is `s3.generate_presigned_url("get_object", Params={"Bucket": ..., "Key": key}, ExpiresIn=ttl_seconds)`. No need to hand-roll HMAC signing: `boto3` and Garage do the exact signature-in-query-param mechanism (SigV4) that real AWS S3 uses, so you're learning the actual protocol instead of a toy version of it.
+- Read the generated URL and the [S3 compatibility notes](https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/) closely enough to explain to yourself what `X-Amz-Signature`, `X-Amz-Expires`, and `X-Amz-Credential` are doing — that's the actual learning objective here, not just calling the function.
+- Download endpoint changes: instead of streaming the file through your API on every request, `GET /files/{id}/download` now does the ACL check (owner/share) and then returns a presigned Garage URL — the client fetches bytes directly from Garage, not through your API. This is the "give me a link, not a session" pattern real file services use, and it's now literally true: the bytes never touch your FastAPI process.
 
 ### Service Layer
-- `service.delete_file(user_id, file_id)`: ACL check, revoke shares, delete DB row, delete blob — all-or-nothing across DB+disk (accept that disk deletion can't join the DB transaction; decide and document your ordering: DB commit first, then best-effort disk cleanup with a retry/log-on-failure path — this is a real distributed-systems tradeoff, not a toy problem).
+- `service.delete_file(user_id, file_id)`: ACL check, revoke shares, delete DB row, delete the object from Garage — all-or-nothing across DB+object-store (accept that the `s3.delete_object` call can't join the DB transaction; decide and document your ordering: DB commit first, then best-effort object cleanup with a retry/log-on-failure path — this is a real distributed-systems tradeoff, not a toy problem).
 - `service.delete_folder(user_id, folder_id)`: uses the cascade repo function inside one transaction.
 - Biggest "big service function" yet: `service.get_download_link(user_id_or_none, file_id, share_token=None)` unifying owner path, share path, and signed-URL generation — the natural endpoint of the branching logic you started in cycle 2.
 
@@ -153,12 +159,11 @@ Each cycle ends with something runnable and demoable. Don't start cycle N+1 unti
 ### Endpoints
 - `DELETE /folders/{id}` (cascade)
 - `DELETE /files/{id}` (revokes shares too)
-- `GET /files/{id}/download` → returns signed URL
-- `GET /blobs/{key}?sig=...&exp=...` (actual bytes)
+- `GET /files/{id}/download` → returns a presigned Garage URL (no separate `/blobs/{key}` route needed — Garage itself serves the bytes once the URL is presigned)
 
 ### Side effects you'll get
-- Transactions, cascades, and an honest DB-vs-filesystem consistency tradeoff.
-- Real signed-URL mechanics (HMAC, expiry) — the S3 familiarity you wanted.
+- Transactions, cascades, and an honest DB-vs-object-store consistency tradeoff.
+- Real S3 presigned-URL mechanics (SigV4, expiry) — the actual S3 familiarity you wanted, not a simulation of it.
 - A justified refactor, not a premature one.
 
 ---
@@ -172,7 +177,7 @@ Each cycle ends with something runnable and demoable. Don't start cycle N+1 unti
 - Query practice: "who accessed file X in the last 7 days" and "top 10 most-shared files" — GROUP BY / ORDER BY / LIMIT reporting queries, a different SQL muscle than the transactional queries so far.
 
 ### File Container
-- Orphan-blob cleanup script: find storage keys on disk with no matching `files` row (from the best-effort-delete tradeoff in cycle 4) and reconcile. This is the payoff for the honest tradeoff you documented earlier.
+- Orphan-object cleanup script: `s3.list_objects_v2` the Garage bucket, diff the keys against `files.storage_key` in the DB, and reconcile any objects with no matching row (from the best-effort-delete tradeoff in cycle 4). This is the payoff for the honest tradeoff you documented earlier, and it's the same reconciliation job real S3-backed systems run.
 
 ### Service Layer
 - No new business feature — instead, wrap existing service functions with structured logging/timing, surfacing where a "big service function" is doing too much (candidate for splitting) vs. where it's fine.
