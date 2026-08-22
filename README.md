@@ -81,7 +81,7 @@ Other useful commands:
 uv run alembic current          # show current DB revision
 uv run alembic history          # list all revisions
 uv run alembic downgrade -1     # roll back one revision
-uv run alembic revision -m "description"   # create a new empty migration (fill in raw SQL)
+`uv run alembic revision -m "description"`   # create a new empty migration (fill in raw SQL)
 ```
 
 ## 5. Run the app

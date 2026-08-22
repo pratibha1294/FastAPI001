@@ -191,6 +191,41 @@ Each cycle ends with something runnable and demoable. Don't start cycle N+1 unti
 
 ---
 
+## Cycle 6 — One feature, event-driven: share notifications via Kafka
+
+**Goal:** Add exactly one new feature — notify a user when someone shares a file with them — and build it event-driven instead of inline, purely so you feel the producer/consumer pattern on a small, contained slice. Everything else in the project (upload, download, quotas, folders) stays exactly as it was in cycles 1–5; this cycle does not refactor them onto Kafka.
+
+### DB/Repo
+- One new table: `notifications`: `id, user_id, message, read, created_at`. Written only by the new consumer below, never by a route handler directly.
+- Practice: idempotent insert in the consumer (dedupe on a Kafka message key, e.g. `share_id`, via `INSERT ... ON DUPLICATE KEY UPDATE` or a unique constraint) — at-least-once delivery means the consumer will eventually see the same message twice.
+
+### File Container
+- No changes. This feature doesn't touch storage at all.
+
+### Service Layer
+- Run Kafka locally (Docker is easiest): `docker run -d --name kafka -p 9092:9092 apache/kafka:3.7.0` (KRaft mode, no Zookeeper needed).
+- Introduce a small `events.py` wrapping `confluent-kafka` (or `aiokafka`), scoped to just this feature:
+  - `publish(topic: str, key: str, value: dict) -> None`
+  - `consume(topic: str, group_id: str, handler: Callable) -> None`
+- One topic: `share-events`.
+- Touch exactly one existing function: `service.create_share_link` (cycle 2) — after the DB commit succeeds, additionally publish `{"type": "share.created", "share_id", "file_id", "shared_by", "shared_with"}`. Nothing else about that function's behavior changes; this is additive, not a rewrite. Publish-after-commit, not before, so you never notify about a share that got rolled back.
+- Write one standalone consumer process, `consumers/notifier.py`: subscribes to `share-events`, and on `share.created` where `shared_with` is non-null, inserts a row into `notifications`. Runs as its own process (`python -m consumers.notifier`), not inside the FastAPI app.
+- This is the whole point of the cycle: compare this one function (publish a fact, let something else react) against every other service function in the project, which calls its collaborators directly. You don't need to generalize the pattern beyond this to learn it.
+
+### ACL/Middleware
+- Consumer-side check: `notifier.py` should not blindly trust the event — before writing a notification, decide whether it needs to re-verify anything, or whether trusting your own producer's payload is acceptable here (it's an internal topic, not user input, so this is a good place to explicitly reason about *when* re-validation is and isn't necessary).
+- Failure mode to think through and document: if `notifier.py` is down, `share.created` events queue up in Kafka rather than being lost (it's a log, not a fire-and-forget queue) — so a share still succeeds for the sharer even if notifications are delayed. Confirm this is true by killing the consumer, creating a share, and restarting the consumer to watch it catch up.
+
+### Endpoints
+- `GET /notifications` (list a user's notifications), `PATCH /notifications/{id}/read`.
+- `POST /files/{id}/share` (cycle 2) is otherwise unchanged from the caller's perspective — same request/response, just an added side effect happening asynchronously behind it.
+
+### Side effects you'll get
+- First message-broker integration, kept small: one topic, one producer call, one consumer.
+- A direct, felt comparison between synchronous (everything else in the project) and asynchronous (this one path) side effects, without having to rebuild the whole system to get it.
+
+---
+
 ## How to use this doc
 
 - Work top to bottom; don't skip a module within a cycle even if it feels thin (e.g. cycle 1's ACL is one `if` statement — that's intentional, it grows on purpose).
