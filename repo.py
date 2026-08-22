@@ -27,3 +27,10 @@ def updateUserPassword(userId: int, password: str):
     SET password = %s
     where id= %s """, (password, userId))
     connection.commit()
+
+def create_file_record(owner_id, filename, storage_key):
+    cursor=connection.cursor()
+    cursor.execute("""INSERT INTO files (owner_id, filename, storage_key)
+    VALUES (%s, %s, %s); """, (owner_id, filename, storage_key))
+    connection.commit()
+
