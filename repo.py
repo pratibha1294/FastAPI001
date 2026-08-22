@@ -34,3 +34,14 @@ def create_file_record(owner_id, filename, storage_key):
     VALUES (%s, %s, %s); """, (owner_id, filename, storage_key))
     connection.commit()
 
+def get_file(file_id):
+   cursor=connection.cursor()
+   cursor.execute("""select * from files where id=%s""")
+   fileDetails= cursor.fetchone() 
+   return fileDetails
+
+def list_files_for_user(owner_id):
+    cursor= connection.cursor()
+    cursor.execute("""select id,filename from files where owner_id=%s """)
+    fileslist= cursor.fetchone()
+    return fileslist
